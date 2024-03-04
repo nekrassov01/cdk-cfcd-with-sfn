@@ -1,0 +1,170 @@
+{
+  "Comment": "Promote",
+  "StartAt": "Get staging distribution id",
+  "States": {
+    "Get staging distribution id": {
+      "Type": "Task",
+      "Next": "Check primary distribution status",
+      "Parameters": {
+        "Name.$": "$.ParameterKeyStagingDistributionId"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:ssm:getParameter",
+      "ResultSelector": {
+        "Id.$": "$.Parameter.Value"
+      },
+      "ResultPath": "$.StagingDistribution"
+    },
+    "Promote": {
+      "Type": "Task",
+      "Parameters": {
+        "Id.$": "$.PrimaryDistribution.Id",
+        "StagingDistributionId.$": "$.StagingDistribution.Id",
+        "IfMatch.$": "States.Format('{},{}', $.PrimaryDistribution.ETag, $.StagingDistribution.ETag)"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:cloudfront:updateDistributionWithStagingConfig",
+      "Next": "Create primary distribution invalidation",
+      "ResultSelector": {
+        "Id.$": "$.Distribution.Id"
+      },
+      "ResultPath": "$.PromotedDistribution"
+    },
+    "Create primary distribution invalidation": {
+      "Type": "Task",
+      "Next": "Check invalidation status",
+      "Parameters": {
+        "DistributionId.$": "$.PrimaryDistribution.Id",
+        "InvalidationBatch": {
+          "CallerReference.$": "$.PrimaryDistribution.DistributionConfig.CallerReference",
+          "Paths": {
+            "Quantity": 1,
+            "Items": ["/*"]
+          }
+        }
+      },
+      "Resource": "arn:aws:states:::aws-sdk:cloudfront:createInvalidation",
+      "ResultSelector": {
+        "Id.$": "$.Invalidation.Id",
+        "Status.$": "$.Invalidation.Status"
+      },
+      "ResultPath": "$.Invalidation"
+    },
+    "Check invalidation status": {
+      "Type": "Task",
+      "Next": "Choice for invalidation",
+      "Parameters": {
+        "DistributionId.$": "$.PrimaryDistribution.Id",
+        "Id.$": "$.Invalidation.Id"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:cloudfront:getInvalidation",
+      "ResultSelector": {
+        "Id.$": "$.Invalidation.Id",
+        "Status.$": "$.Invalidation.Status"
+      },
+      "ResultPath": "$.Invalidation"
+    },
+    "Choice for invalidation": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.Invalidation.Status",
+          "StringEquals": "Completed",
+          "Next": "Success"
+        }
+      ],
+      "Default": "Wait completing invalidation"
+    },
+    "Wait completing invalidation": {
+      "Type": "Wait",
+      "Seconds": 3,
+      "Next": "Check invalidation status"
+    },
+    "Check primary distribution status": {
+      "Type": "Task",
+      "Next": "Choice for primary distribution",
+      "Parameters": {
+        "Id.$": "$.PrimaryDistributionId"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:cloudfront:getDistribution",
+      "ResultSelector": {
+        "Status.$": "$.Distribution.Status"
+      },
+      "ResultPath": "$.PrimaryDistribution"
+    },
+    "Check staging distribution status": {
+      "Type": "Task",
+      "Next": "Choice for staging distribution",
+      "Parameters": {
+        "Id.$": "$.StagingDistribution.Id"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:cloudfront:getDistribution",
+      "ResultSelector": {
+        "Id.$": "$.Distribution.Id",
+        "Status.$": "$.Distribution.Status"
+      },
+      "ResultPath": "$.StagingDistribution"
+    },
+    "Choice for primary distribution": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.PrimaryDistribution.Status",
+          "StringEquals": "Deployed",
+          "Next": "Check staging distribution status"
+        }
+      ],
+      "Default": "Wait deploying primary distribution"
+    },
+    "Choice for staging distribution": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.StagingDistribution.Status",
+          "StringEquals": "Deployed",
+          "Next": "Get primary distribution"
+        }
+      ],
+      "Default": "Wait deploying staging distribution"
+    },
+    "Get primary distribution": {
+      "Type": "Task",
+      "Next": "Get staging distribution",
+      "Parameters": {
+        "Id.$": "$.PrimaryDistributionId"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:cloudfront:getDistribution",
+      "ResultSelector": {
+        "Id.$": "$.Distribution.Id",
+        "DistributionConfig.$": "$.Distribution.DistributionConfig",
+        "ETag.$": "$.ETag"
+      },
+      "ResultPath": "$.PrimaryDistribution"
+    },
+    "Get staging distribution": {
+      "Type": "Task",
+      "Next": "Promote",
+      "Parameters": {
+        "Id.$": "$.StagingDistribution.Id"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:cloudfront:getDistribution",
+      "ResultSelector": {
+        "Id.$": "$.Distribution.Id",
+        "DistributionConfig.$": "$.Distribution.DistributionConfig",
+        "ETag.$": "$.ETag"
+      },
+      "ResultPath": "$.StagingDistribution"
+    },
+    "Wait deploying primary distribution": {
+      "Type": "Wait",
+      "Seconds": 3,
+      "Next": "Check primary distribution status"
+    },
+    "Wait deploying staging distribution": {
+      "Type": "Wait",
+      "Seconds": 3,
+      "Next": "Check staging distribution status"
+    },
+    "Success": {
+      "Type": "Succeed"
+    }
+  }
+}

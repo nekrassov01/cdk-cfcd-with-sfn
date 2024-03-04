@@ -1,0 +1,262 @@
+{
+  "Comment": "Configure",
+  "StartAt": "Check application frontend version",
+  "States": {
+    "Check application frontend version": {
+      "Type": "Task",
+      "Next": "Check staging distribution exists",
+      "Parameters": {
+        "Name.$": "$.ParameterKeyFrontendVersion"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:ssm:getParameter",
+      "ResultSelector": {
+        "Key.$": "$.Parameter.Name",
+        "Value.$": "$.Parameter.Value"
+      },
+      "ResultPath": "$.Parameter.Get.FrontendVersion"
+    },
+    "Check staging distribution exists": {
+      "Type": "Task",
+      "Parameters": {
+        "Name.$": "$.ParameterKeyStagingDistributionId"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:ssm:getParameter",
+      "ResultSelector": {
+        "Id.$": "$.Parameter.Value"
+      },
+      "ResultPath": "$.StagingDistribution",
+      "Next": "Choice for staging distribution"
+    },
+    "Choice for staging distribution": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.StagingDistribution.Id",
+          "StringEquals": "dummy",
+          "Next": "Get primary distribution"
+        }
+      ],
+      "Default": "Get staging distribution from parameter"
+    },
+    "Get staging distribution from parameter": {
+      "Type": "Task",
+      "Next": "Get continuous deployment policy",
+      "Parameters": {
+        "Id.$": "$.StagingDistribution.Id"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:cloudfront:getDistribution",
+      "ResultSelector": {
+        "Id.$": "$.Distribution.Id",
+        "DistributionConfig.$": "$.Distribution.DistributionConfig",
+        "ETag.$": "$.ETag"
+      },
+      "ResultPath": "$.StagingDistribution"
+    },
+    "Get continuous deployment policy": {
+      "Type": "Task",
+      "Next": "Enable continuous deployment policy",
+      "Parameters": {
+        "Id.$": "$.StagingDistribution.DistributionConfig.ContinuousDeploymentPolicyId"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:cloudfront:getContinuousDeploymentPolicy",
+      "ResultSelector": {
+        "Id.$": "$.ContinuousDeploymentPolicy.Id",
+        "ContinuousDeploymentPolicyConfig.$": "$.ContinuousDeploymentPolicy.ContinuousDeploymentPolicyConfig",
+        "ETag.$": "$.ETag"
+      },
+      "ResultPath": "$.ContinuousDeploymentPolicy"
+    },
+    "Enable continuous deployment policy": {
+      "Type": "Task",
+      "Next": "Update S3 origin path for primary distribution",
+      "Parameters": {
+        "IfMatch.$": "$.ContinuousDeploymentPolicy.ETag",
+        "ContinuousDeploymentPolicyConfig": {
+          "Enabled": "true",
+          "StagingDistributionDnsNames": {
+            "Quantity.$": "$.ContinuousDeploymentPolicy.ContinuousDeploymentPolicyConfig.StagingDistributionDnsNames.Quantity",
+            "Items.$": "$.ContinuousDeploymentPolicy.ContinuousDeploymentPolicyConfig.StagingDistributionDnsNames.Items"
+          },
+          "TrafficConfig.$": "$.ContinuousDeploymentPolicy.ContinuousDeploymentPolicyConfig.TrafficConfig"
+        },
+        "Id.$": "$.ContinuousDeploymentPolicy.Id"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:cloudfront:updateContinuousDeploymentPolicy",
+      "ResultSelector": {
+        "Id.$": "$.ContinuousDeploymentPolicy.Id",
+        "ContinuousDeploymentPolicyConfig.$": "$.ContinuousDeploymentPolicy.ContinuousDeploymentPolicyConfig",
+        "ETag.$": "$.ETag"
+      },
+      "ResultPath": "$.ContinuousDeploymentPolicy"
+    },
+    "Get primary distribution": {
+      "Type": "Task",
+      "Next": "Create staging distribution",
+      "Parameters": {
+        "Id.$": "$.PrimaryDistributionId"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:cloudfront:getDistribution",
+      "ResultSelector": {
+        "Id.$": "$.Distribution.Id",
+        "DistributionConfig.$": "$.Distribution.DistributionConfig",
+        "ETag.$": "$.ETag"
+      },
+      "ResultPath": "$.PrimaryDistribution"
+    },
+    "Create staging distribution": {
+      "Type": "Task",
+      "Parameters": {
+        "PrimaryDistributionId.$": "$.PrimaryDistributionId",
+        "CallerReference.$": "States.UUID()",
+        "Staging": "True",
+        "IfMatch.$": "$.PrimaryDistribution.ETag"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:cloudfront:copyDistribution",
+      "Next": "Create continuous deployment policy",
+      "ResultSelector": {
+        "Id.$": "$.Distribution.Id",
+        "DomainName.$": "$.Distribution.DomainName"
+      },
+      "ResultPath": "$.StagingDistribution"
+    },
+    "Create continuous deployment policy": {
+      "Type": "Task",
+      "Parameters": {
+        "ContinuousDeploymentPolicyConfig": {
+          "Enabled": true,
+          "StagingDistributionDnsNames": {
+            "Quantity": 1,
+            "Items.$": "States.Array($.StagingDistribution.DomainName)"
+          },
+          "TrafficConfig": {
+            "SingleHeaderConfig": {
+              "Header": "aws-cf-cd-staging",
+              "Value": "true"
+            },
+            "Type": "SingleHeader"
+          }
+        }
+      },
+      "Resource": "arn:aws:states:::aws-sdk:cloudfront:createContinuousDeploymentPolicy",
+      "Next": "Attach continuous deployment policy to primary distribution",
+      "ResultPath": "$.ContinuousDeploymentPolicy",
+      "ResultSelector": {
+        "Id.$": "$.ContinuousDeploymentPolicy.Id",
+        "ContinuousDeploymentPolicyConfig.$": "$.ContinuousDeploymentPolicy.ContinuousDeploymentPolicyConfig",
+        "ETag.$": "$.ETag"
+      }
+    },
+    "Attach continuous deployment policy to primary distribution": {
+      "Type": "Task",
+      "Parameters": {
+        "Id.$": "$.PrimaryDistributionId",
+        "IfMatch.$": "$.PrimaryDistribution.ETag",
+        "DistributionConfig": {
+          "Aliases.$": "$.PrimaryDistribution.DistributionConfig.Aliases",
+          "CacheBehaviors.$": "$.PrimaryDistribution.DistributionConfig.CacheBehaviors",
+          "ContinuousDeploymentPolicyId.$": "$.ContinuousDeploymentPolicy.Id",
+          "CallerReference.$": "$.PrimaryDistribution.DistributionConfig.CallerReference",
+          "Comment.$": "$.PrimaryDistribution.DistributionConfig.Comment",
+          "CustomErrorResponses.$": "$.PrimaryDistribution.DistributionConfig.CustomErrorResponses",
+          "DefaultCacheBehavior.$": "$.PrimaryDistribution.DistributionConfig.DefaultCacheBehavior",
+          "DefaultRootObject.$": "$.PrimaryDistribution.DistributionConfig.DefaultRootObject",
+          "Enabled.$": "$.PrimaryDistribution.DistributionConfig.Enabled",
+          "HttpVersion.$": "$.PrimaryDistribution.DistributionConfig.HttpVersion",
+          "IsIPV6Enabled.$": "$.PrimaryDistribution.DistributionConfig.IsIPV6Enabled",
+          "Logging.$": "$.PrimaryDistribution.DistributionConfig.Logging",
+          "OriginGroups.$": "$.PrimaryDistribution.DistributionConfig.OriginGroups",
+          "Origins.$": "$.PrimaryDistribution.DistributionConfig.Origins",
+          "PriceClass.$": "$.PrimaryDistribution.DistributionConfig.PriceClass",
+          "Restrictions.$": "$.PrimaryDistribution.DistributionConfig.Restrictions",
+          "Staging.$": "$.PrimaryDistribution.DistributionConfig.Staging",
+          "ViewerCertificate.$": "$.PrimaryDistribution.DistributionConfig.ViewerCertificate",
+          "WebACLId.$": "$.PrimaryDistribution.DistributionConfig.WebACLId"
+        }
+      },
+      "Resource": "arn:aws:states:::aws-sdk:cloudfront:updateDistribution",
+      "Next": "Put parameter for staging distribution id",
+      "ResultPath": "$.PrimaryDistribution",
+      "ResultSelector": {
+        "DistributionConfig.$": "$.Distribution.DistributionConfig",
+        "ETag.$": "$.ETag"
+      }
+    },
+    "Put parameter for staging distribution id": {
+      "Type": "Task",
+      "Parameters": {
+        "Name.$": "$.ParameterKeyStagingDistributionId",
+        "Value.$": "$.StagingDistribution.Id",
+        "Type": "String",
+        "Overwrite": "true"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:ssm:putParameter",
+      "Next": "Get staging distribution",
+      "ResultSelector": {
+        "Version.$": "$.Version"
+      },
+      "ResultPath": "$.Parameter.Put.StagingDistribution"
+    },
+    "Get staging distribution": {
+      "Type": "Task",
+      "Next": "Update S3 origin path for primary distribution",
+      "Parameters": {
+        "Id.$": "$.StagingDistribution.Id"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:cloudfront:getDistribution",
+      "ResultSelector": {
+        "Id.$": "$.Distribution.Id",
+        "DistributionConfig.$": "$.Distribution.DistributionConfig",
+        "ETag.$": "$.ETag"
+      },
+      "ResultPath": "$.StagingDistribution"
+    },
+    "Update S3 origin path for primary distribution": {
+      "Type": "Task",
+      "Parameters": {
+        "Id.$": "$.StagingDistribution.Id",
+        "IfMatch.$": "$.StagingDistribution.ETag",
+        "DistributionConfig": {
+          "Aliases.$": "$.StagingDistribution.DistributionConfig.Aliases",
+          "CacheBehaviors.$": "$.StagingDistribution.DistributionConfig.CacheBehaviors",
+          "ContinuousDeploymentPolicyId.$": "$.StagingDistribution.DistributionConfig.ContinuousDeploymentPolicyId",
+          "CallerReference.$": "$.StagingDistribution.DistributionConfig.CallerReference",
+          "Comment.$": "$.StagingDistribution.DistributionConfig.Comment",
+          "CustomErrorResponses.$": "$.StagingDistribution.DistributionConfig.CustomErrorResponses",
+          "DefaultCacheBehavior.$": "$.StagingDistribution.DistributionConfig.DefaultCacheBehavior",
+          "DefaultRootObject.$": "$.StagingDistribution.DistributionConfig.DefaultRootObject",
+          "Enabled.$": "$.StagingDistribution.DistributionConfig.Enabled",
+          "HttpVersion.$": "$.StagingDistribution.DistributionConfig.HttpVersion",
+          "IsIPV6Enabled.$": "$.StagingDistribution.DistributionConfig.IsIPV6Enabled",
+          "Logging.$": "$.StagingDistribution.DistributionConfig.Logging",
+          "OriginGroups.$": "$.StagingDistribution.DistributionConfig.OriginGroups",
+          "Origins": {
+            "Items": [
+              {
+                "ConnectionAttempts.$": "$.StagingDistribution.DistributionConfig.Origins.Items[0].ConnectionAttempts",
+                "ConnectionTimeout.$": "$.StagingDistribution.DistributionConfig.Origins.Items[0].ConnectionTimeout",
+                "CustomHeaders.$": "$.StagingDistribution.DistributionConfig.Origins.Items[0].CustomHeaders",
+                "DomainName.$": "$.StagingDistribution.DistributionConfig.Origins.Items[0].DomainName",
+                "Id.$": "$.StagingDistribution.DistributionConfig.Origins.Items[0].Id",
+                "OriginAccessControlId.$": "$.StagingDistribution.DistributionConfig.Origins.Items[0].OriginAccessControlId",
+                "OriginPath.$": "States.Format('/{}', $.Parameter.Get.FrontendVersion.Value)",
+                "OriginShield.$": "$.StagingDistribution.DistributionConfig.Origins.Items[0].OriginShield",
+                "S3OriginConfig.$": "$.StagingDistribution.DistributionConfig.Origins.Items[0].S3OriginConfig"
+              }
+            ],
+            "Quantity": 1
+          },
+          "PriceClass.$": "$.StagingDistribution.DistributionConfig.PriceClass",
+          "Restrictions.$": "$.StagingDistribution.DistributionConfig.Restrictions",
+          "Staging.$": "$.StagingDistribution.DistributionConfig.Staging",
+          "ViewerCertificate.$": "$.StagingDistribution.DistributionConfig.ViewerCertificate",
+          "WebACLId.$": "$.StagingDistribution.DistributionConfig.WebACLId"
+        }
+      },
+      "Resource": "arn:aws:states:::aws-sdk:cloudfront:updateDistribution",
+      "Next": "Success"
+    },
+    "Success": {
+      "Type": "Succeed"
+    }
+  }
+}
