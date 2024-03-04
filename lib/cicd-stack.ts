@@ -413,12 +413,7 @@ export class CloudFrontDeploymentSampleCicdStack extends Stack {
             new iam.PolicyStatement({
               effect: iam.Effect.ALLOW,
               actions: ["codebuild:BatchGetBuilds", "codebuild:StartBuild"],
-              resources: [
-                frontendBuildProject.projectArn,
-                frontendDeployProject.projectArn,
-                frontendConfigureSfn.stateMachineArn,
-                frontendPromoteSfn.stateMachineArn,
-              ],
+              resources: [frontendBuildProject.projectArn, frontendDeployProject.projectArn],
             }),
           ],
         }),
